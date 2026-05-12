@@ -1,0 +1,10 @@
+Here's a breakdown of each function, followed by a visual diagram of how they connect:
+setup() runs once on boot. It initializes the LCD, attempts to mount the SD card, and calls scanSD() and displayMenu() to get the UI ready.
+loop() is the main event loop. It routes to either handleMenuNavigation() or handleReadingMode() depending on whether a book is open.
+scanSD() opens the SD root directory and iterates through files, collecting any .txt or .TXT files into the fileList[] array.
+displayMenu() renders the book selection screen — it shows the currently selected filename (minus the .txt extension) centered on the LCD with scroll hints.
+handleMenuNavigation() reads the joystick's Y-axis to scroll through books. A button press opens the selected book, loads its saved bookmark position from flash via Preferences, then fast-forwards to that page using skipPageSilent().
+handleReadingMode() reads the joystick's X-axis to page forward or backward through the book using the pageHistory[] array. A short press does nothing; holding the button for 5 seconds saves the current position to flash and returns to the menu.
+showPage() renders the current page to the LCD. It reads words one at a time from the file, wrapping them across the 4 rows × 20 columns display. When a word won't fit on the current row it moves to the next; if it won't fit at all, it seeks the file pointer back so that word becomes the start of the next page.
+skipPageSilent() does exactly what showPage() does — the same word-wrap logic — but without writing anything to the LCD. It's used during bookmark restoration to advance the file pointer a full page at a time without flickering the screen.
+getUniqueKey() generates a short, stable key (max 15 chars) for storing bookmarks in flash. Long filenames are shortened to first 7 + last 7 characters to fit within Preferences key length limits.
