@@ -1,0 +1,429 @@
+#include <SPI.h>
+
+#include <SD.h>
+
+#include <Wire.h>
+
+#include <LiquidCrystal_I2C.h>
+
+#include <Preferences.h> 
+
+
+#define SD_CS  5
+
+#define JOY_X  34  
+
+#define JOY_Y  35  
+
+#define JOY_SW 27  
+
+
+#define LCD_ADDR 0x27 
+
+#define LCD_COLS 20
+
+#define LCD_ROWS 4
+
+
+LiquidCrystal_I2C lcd(LCD_ADDR, LCD_COLS, LCD_ROWS);
+
+Preferences prefs;
+
+
+String fileList[20]; 
+
+int fileCount = 0;
+
+int selectedIndex = 0;
+
+bool isReading = false;
+
+File bookFile;
+
+
+unsigned long pageHistory[100]; 
+
+int historyIndex = 0;
+
+
+String getUniqueKey(String filename) {
+
+  if (filename.length() <= 15) return filename;
+
+  return filename.substring(0, 7) + filename.substring(filename.length() - 7);
+
+}
+
+
+void setup() {
+
+  Serial.begin(115200); // For debugging
+
+  pinMode(JOY_SW, INPUT_PULLUP);
+
+  lcd.init();
+
+  lcd.backlight();
+
+  lcd.clear();
+
+  lcd.setCursor(2, 1);
+
+  lcd.print("Welcome back sir");
+
+  delay(2000); 
+
+  
+
+  // 16MHz is the "Sweet Spot" for speed vs stability
+
+  if (!SD.begin(SD_CS, SPI, 16000000)) {
+
+    lcd.clear();
+
+    lcd.setCursor(3, 1);
+
+    lcd.print("SD Card Fail!");
+
+    while (1); 
+
+  }
+
+
+  lcd.clear();
+
+  lcd.setCursor(1, 1); 
+
+  lcd.print("Scanning SD Card");
+
+  for(int i = 0; i < 2; i++) {
+
+    lcd.setCursor(17, 1); lcd.print("..."); delay(300);
+
+    lcd.setCursor(17, 1); lcd.print("   "); delay(300);
+
+  }
+
+  
+
+  scanSD();
+
+  displayMenu();
+
+}
+
+
+void loop() {
+
+  if (!isReading) handleMenuNavigation();
+
+  else handleReadingMode();
+
+}
+
+
+void scanSD() {
+
+  File root = SD.open("/");
+
+  fileCount = 0;
+
+  while (File entry = root.openNextFile()) {
+
+    String name = String(entry.name());
+
+    // Check for both uppercase and lowercase extensions
+
+    if (!entry.isDirectory() && (name.endsWith(".txt") || name.endsWith(".TXT"))) {
+
+      fileList[fileCount++] = name;
+
+      Serial.println("Found book: " + name);
+
+    }
+
+    entry.close();
+
+    if (fileCount >= 20) break;
+
+  }
+
+  root.close();
+
+}
+
+
+void displayMenu() {
+
+  lcd.clear();
+
+  lcd.setCursor(1, 0); 
+
+  lcd.print("--- SELECT BOOK ---");
+
+  if (fileCount > 0) {
+
+    String nameDisplay = fileList[selectedIndex];
+
+    if (nameDisplay.endsWith(".txt") || nameDisplay.endsWith(".TXT")) {
+
+      nameDisplay = nameDisplay.substring(0, nameDisplay.length() - 4);
+
+    }
+
+    int padding = (20 - nameDisplay.length()) / 2;
+
+    lcd.setCursor(max(0, padding), 2);
+
+    lcd.print(nameDisplay.substring(0, 18));
+
+    lcd.setCursor(5, 3);
+
+    lcd.print("< Scroll >");
+
+  } else {
+
+    lcd.setCursor(3, 2);
+
+    lcd.print("No books found");
+
+  }
+
+}
+
+
+void handleMenuNavigation() {
+
+  int yVal = analogRead(JOY_Y);
+
+  if (yVal > 3200 && fileCount > 0) { selectedIndex = (selectedIndex + 1) % fileCount; displayMenu(); delay(300); }
+
+  if (yVal < 800 && fileCount > 0)  { selectedIndex = (selectedIndex - 1 + fileCount) % fileCount; displayMenu(); delay(300); }
+
+  
+
+  if (digitalRead(JOY_SW) == LOW && fileCount > 0) {
+
+    delay(200);
+
+    isReading = true;
+
+    bookFile = SD.open("/" + fileList[selectedIndex]);
+
+    String secureKey = getUniqueKey(fileList[selectedIndex]);
+
+    prefs.begin("book-marks", true);
+
+    unsigned long savedPos = prefs.getUInt(secureKey.c_str(), 0);
+
+    prefs.end();
+
+
+    lcd.clear();
+
+    lcd.setCursor(4, 1);
+
+    lcd.print("Resuming...");
+
+    
+
+    historyIndex = 0;
+
+    bookFile.seek(0);
+
+    pageHistory[historyIndex] = 0;
+
+
+    while (bookFile.position() < savedPos && bookFile.available()) {
+
+      skipPageSilent();
+
+      if (historyIndex < 99) {
+
+        historyIndex++;
+
+      } else {
+
+        for(int i=0; i<99; i++) pageHistory[i] = pageHistory[i+1];
+
+      }
+
+      pageHistory[historyIndex] = bookFile.position();
+
+    }
+
+    
+
+    delay(800); 
+
+    bookFile.seek(pageHistory[historyIndex]);
+
+    showPage();
+
+    while(digitalRead(JOY_SW) == LOW); 
+
+  }
+
+}
+
+
+void handleReadingMode() {
+
+  int xVal = analogRead(JOY_X);
+
+  if (xVal > 3200 && bookFile.available()) { 
+
+    historyIndex++;
+
+    if (historyIndex >= 100) {
+
+      for(int i=0; i<99; i++) pageHistory[i] = pageHistory[i+1];
+
+      historyIndex = 99;
+
+    }
+
+    pageHistory[historyIndex] = bookFile.position();
+
+    showPage();
+
+    delay(350);
+
+  } 
+
+  
+
+  if (xVal < 800 && historyIndex > 0) { 
+
+    historyIndex--;
+
+    bookFile.seek(pageHistory[historyIndex]);
+
+    showPage();
+
+    delay(350);
+
+  }
+
+
+  if (digitalRead(JOY_SW) == LOW) {
+
+    unsigned long holdStart = millis();
+
+    while (digitalRead(JOY_SW) == LOW) {
+
+      if (millis() - holdStart > 5000) {
+
+        lcd.clear();
+
+        lcd.setCursor(5, 1);
+
+        lcd.print("Saving...");
+
+        String secureKey = getUniqueKey(fileList[selectedIndex]);
+
+        prefs.begin("book-marks", false);
+
+        prefs.putUInt(secureKey.c_str(), pageHistory[historyIndex]);
+
+        prefs.end();
+
+        delay(1000); 
+
+        bookFile.close();
+
+        isReading = false;
+
+        displayMenu();
+
+        while(digitalRead(JOY_SW) == LOW); 
+
+        return;
+
+      }
+
+    }
+
+  }
+
+}
+
+
+void skipPageSilent() {
+
+  int currentRow = 0, currentCol = 0;
+
+  while (currentRow < 4 && bookFile.available()) {
+
+    String word = "";
+
+    long wordStartPos = bookFile.position();
+
+    while (bookFile.available()) {
+
+      char c = bookFile.read();
+
+      if (c == ' ' || c == '\n' || c == '\r') { if (word.length() == 0) continue; break; }
+
+      if (c >= 32 && c <= 126) word += c;
+
+    }
+
+    if (word.length() == 0) break;
+
+    if (currentCol + word.length() <= 20) { currentCol += word.length() + 1; } 
+
+    else { currentRow++; currentCol = 0; if (currentRow < 4) currentCol = word.length() + 1; else bookFile.seek(wordStartPos); }
+
+  }
+
+}
+
+
+void showPage() {
+
+  lcd.clear();
+
+  if (!bookFile.available()) { lcd.setCursor(4, 1); lcd.print("End of Book"); return; }
+
+  int currentRow = 0, currentCol = 0;
+
+  while (currentRow < 4 && bookFile.available()) {
+
+    String word = "";
+
+    long wordStartPos = bookFile.position();
+
+    while (bookFile.available()) {
+
+      char c = bookFile.read();
+
+      if (c == ' ' || c == '\n' || c == '\r') { if (word.length() == 0) continue; break; }
+
+      if (c >= 32 && c <= 126) word += c;
+
+    }
+
+    if (word.length() == 0) break;
+
+    if (currentCol + word.length() <= 20) {
+
+      lcd.setCursor(currentCol, currentRow);
+
+      lcd.print(word);
+
+      currentCol += word.length() + 1; 
+
+    } else { 
+
+      currentRow++; currentCol = 0;
+
+      if (currentRow < 4) { lcd.setCursor(currentCol, currentRow); lcd.print(word); currentCol = word.length() + 1; }
+
+      else bookFile.seek(wordStartPos); 
+
+    }
+
+  }
+
+}
