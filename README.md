@@ -103,3 +103,7 @@ Joystick not responding
 
 Double-check wiring — GPIOs 34/35 have no internal pull-up resistors
 Verify the joystick VCC is connected to 3.3V, not 5V
+
+![image alt](https://github.com/Fin-420/E-reader/blob/a5026121abc78591e630f5b42495d72b8679a13b/IMG_0717.mov)
+
+
